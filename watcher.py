@@ -9,16 +9,16 @@ import sync
 import logging
 if __name__ == "__main__":
 
-    IP = "10.0.0.5"
+    if len(sys.argv) < 4:
+        print(sys.argv[0], " ip localDirectory remoteDirectory")
+        exit(-1)
+    IP = sys.argv[1]
     PORT = 2121
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
-    if len(sys.argv) < 3:
-        print(sys.argv[0], " localDirectory remoteDirectory")
-        exit(-1)
-    localDirectory = sys.argv[1] if len(sys.argv) > 1 else '.'
-    remoteDirectory = sys.argv[2]  
+    localDirectory = sys.argv[2] if len(sys.argv) > 1 else '.'
+    remoteDirectory = sys.argv[3]  
     ftp = ftpsync.FtpSync(localDirectory, remoteDirectory, IP, PORT)
     ftp.addPrinter(print)
     ftp.start()
