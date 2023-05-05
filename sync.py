@@ -2,7 +2,7 @@ from watchdog.events import *
 import sys
 import threading
 import time
-class SyncEventHandler(LoggingEventHandler):
+class SyncEventHandler(FileSystemEventHandler):
     """Logs all the events captured."""
     
     def __init__(self):
@@ -12,11 +12,11 @@ class SyncEventHandler(LoggingEventHandler):
     def on_moved(self, event: FileSystemEvent) -> None:
         dfn = event.src_path
         nfn = event.dest_path
-        filetype = self.get_filetype(event.is_directory)
+        filetype = self.get_filetype(event)
         with self.lock:
             self.last_file_event[dfn] = ("deleted", time.time_ns(), filetype)
-            self.last_file_event[nfn] = ("created",time.time_ns(), filetype)
-
+            self.last_file_event[nfn] = ("created", time.time_ns(), filetype)
+        print(dfn, nfn)
     def on_created(self, event: FileSystemEvent) -> None:
         fn = event.src_path
         with self.lock:

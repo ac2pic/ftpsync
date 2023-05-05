@@ -37,7 +37,9 @@ if __name__ == "__main__":
             to_process = []
             for fn, (evt, timestamp, filetype) in last_events.items():
                 last_update = current_time - timestamp
-                if last_update > delay_threshold or filetype == "dir":
+                if evt == "created" or filetype == "dir":
+                    to_process.append((fn, evt, filetype))
+                elif last_update > delay_threshold:
                     to_process.append((fn, evt, filetype))
             updated = False
             for (fn, evt, filetype) in to_process:
