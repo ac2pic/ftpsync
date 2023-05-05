@@ -16,7 +16,7 @@ class SyncEventHandler(FileSystemEventHandler):
         with self.lock:
             self.last_file_event[dfn] = ("deleted", time.time_ns(), filetype)
             self.last_file_event[nfn] = ("created", time.time_ns(), filetype)
-        print(dfn, nfn)
+
     def on_created(self, event: FileSystemEvent) -> None:
         fn = event.src_path
         with self.lock:

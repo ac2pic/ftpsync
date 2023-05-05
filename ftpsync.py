@@ -113,9 +113,11 @@ class FtpSync(FTP):
         remotePath = self.getRemotePath(localPath)
         if self.getHash(remotePath) == localHash:
             return False
-        self.print("Updating {}".format(remotePath))
         if self.getHash(remotePath):
+            self.print("Updating {}".format(remotePath))
             self.delete(remotePath)
+        else:
+            self.print("Creating {}".format(remotePath))
 
         with open(localPath, "rb") as fh:
             remoteDirectory = posixpath.dirname(remotePath)
