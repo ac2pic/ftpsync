@@ -3,20 +3,27 @@ import os
 from os.path import relpath, join
 import hashlib
 
+def toPosixPath(filePath):
+    if os.path.sep == posixpath.sep:
+        return filePath
+    _, filePath = os.path.splitdrive(filePath)
+    pathPieces = filePath.split(os.path.sep)
+    return posixpath.sep.join(pathPieces)
+
 def recursiveLocalList(baseDir):
     localFiles = set()
+    localDirectories = set()
     for root, dirs, files in os.walk(baseDir):
         for file in files:
             if relpath(root, baseDir) == '.':
                 localFiles.add(file)
             else:
                 relativePath = join(relpath(root, baseDir), file)
-                if os.path.sep != posixpath.sep:
-                    rawRelativePath = relativePath
-                    rawRelativePathPieces = rawRelativePath.split(os.path.sep)
-                    relativePath = posixpath.sep.join(rawRelativePathPieces)
-                localFiles.add(relativePath) 
-    return localFiles
+                localFiles.add(toPosixPath(relativePath))
+        for directory in dirs:
+            localDirectory = os.path.join(root, directory)
+            localDirectories.add(localDirectory)
+    return localFiles, localDirectories
 
 
 def getAllSubpaths(filePath):
@@ -39,3 +46,9 @@ def getMd5(fd):
             break
         m.update(chunk) 
     return m.hexdigest()
+
+def getFileMd5(filePath):
+    fileMd5 = ""
+    with open(filePath, "rb") as fh:
+        fileMd5 = getMd5(fh)
+    return fileMd5

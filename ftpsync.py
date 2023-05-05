@@ -7,6 +7,7 @@ import ast
 import json
 import os
 import io
+
 class FtpSync(FTP):
     def __init__(self, localDirectory, remoteDirectory, ip, port = 2121):
         super().__init__()
@@ -16,27 +17,32 @@ class FtpSync(FTP):
         self.rd = remoteDirectory
         self.cacheDirs = set()
         self.fileHashes = {}
+        self.printers = []
+
+    def addPrinter(self, printer):
+        self.printers.append(printer)
+
+    def print(self, msg, end='\n'):
+        for printer in self.printers:
+            printer(msg, end = end)
 
     def connect(self):
         super().connect(self.ip, self.port)
     
     def start(self):
+        self.print("Logging in..")
         self.connect()
-        print(self.login())
-        print(self.getwelcome())
+        self.print(self.login())
+        self.print(self.getwelcome())
         for subpath in utils.getAllSubpaths(self.rd):
             self.cacheDirs.add(subpath)
+        self.print("Syncing up files...")
         self.initialSync()
+        self.print("Synced")
 
     def stop(self):
-        print()
-        print(self.quit())
-    
-    def getRemotePath(self, localPath):
-        relativePath = os.path.relpath(localPath, self.ld)
-        remoteRelativePath = posixpath.sep.join(relativePath.split(os.path.sep))
-        remotePath = posixpath.join(self.rd, remoteRelativePath)
-        return remotePath
+        self.print("")
+        self.print(self.quit())
 
     def initialSync(self):
         # Add non obvious directories like the parent directories of the rd
@@ -44,7 +50,21 @@ class FtpSync(FTP):
         remoteFiles, remoteDirs = self.recursiveList(self.rd, True)
         for remoteDir in remoteDirs:
             self.cacheDirs.add(remoteDir)
-        localFiles  = utils.recursiveLocalList(self.ld)
+
+        localFiles, localDirectories  = utils.recursiveLocalList(self.ld)
+
+        for localDirectory in localDirectories:
+            remoteDir = self.getRemotePath(localDirectory)
+            if remoteDir not in remoteDirs:
+                self.print("Creating directory {}".format(remoteDir))
+                self.recursiveMkdir(remoteDir)
+        
+        for remoteDirectory in remoteDirs:
+            localDir = self.getLocalPath(remoteDirectory)
+            if localDir not in localDirectories:
+                self.print("Creating directory {}".format(localDir))
+                os.makedirs(localDir, exist_ok=True)
+
         hashFiles = {HASH_FILE}
 
         if hashFiles & remoteFiles:
@@ -55,79 +75,113 @@ class FtpSync(FTP):
             self.fileHashes = ast.literal_eval(hashData.decode("utf-8"))
         
         filesToCheck = (localFiles & remoteFiles) - hashFiles
-        if filesToCheck:
-            print("Comparing remote with local files...", end='')
-
         for fileToCheck in filesToCheck:
             localPath = os.path.join(self.ld, fileToCheck)
-            localFileHash = ""
-            fd = open(localPath, "rb")
-            localFileHash = utils.getMd5(fd)
-            remotePath = posixpath.join(self.rd, fileToCheck)
-            if self.fileHashes.get(remotePath, "") != localFileHash:
-                print("Reuploading...", localFilePath)
-                fd.seek(0)
-                self.delete(remotePath)
-                self.uploadFile(fd, remotePath)
-                self.fileHashes[remotePath] = localFileHash
-        if filesToCheck:
-            print("Done")
+            self.uploadIfHashChanged(localPath)
 
         filesToDownload = remoteFiles - (localFiles | hashFiles)
-        if filesToDownload:
-            print("Downloading files...", end='')
-
         for fileToDownload in filesToDownload:
             remotePath = posixpath.join(self.rd, fileToDownload)
             localPath = os.path.join(self.ld, fileToDownload)
-            os.makedirs(os.path.dirname(localPath), exist_ok=True)
-            with open(localPath, 'wb') as fd:
-                fd.seek(0)
-                self.downloadFile(fd, remotePath)
-                fd.seek(0)
-                self.registerHash(remotePath, fd)
-        if filesToDownload:
-            print("Done")
+            self.downloadFileByPath(localPath)
+            self.registerHash(remotePath, utils.getFileMd5(localPath))
+
 
         filesToUpload = localFiles - (remoteFiles | hashFiles)
-        if filesToUpload:
-           print("Uploading files...", end='') 
         for fileToUpload in filesToUpload:
-            # Recursively make directory if it doesn't exist
-            localPath = join(self.ld, fileToUpload)
+            localPath = os.path.join(self.ld, fileToUpload)
             remotePath = posixpath.join(self.rd, fileToUpload)
-            remoteDirectory = posixpath.dirname(remotePath)
-            self.recursiveMkdir(remoteDirectory)
-            with open(localPath, 'rb') as fd:
-                fd.seek(0)
-                self.uploadFile(fd, remotePath)
-                fd.seek(0)
-                self.registerHash(remotePath, fd)
-        if filesToUpload:
-           print("Done")
+            self.uploadFileByPath(localPath)
+            self.registerHash(remotePath, utils.getFileMd5(localPath))
 
         self.syncFileHashes()
-
-    def registerHash(self, remoteFilePath, fd):
-        self.fileHashes[remoteFilePath] = getMd5(fd)
     
+    def getRemotePath(self, localPath):
+        relativePath = os.path.relpath(localPath, self.ld)
+        remoteRelativePath = posixpath.sep.join(relativePath.split(os.path.sep))
+        remotePath = posixpath.join(self.rd, remoteRelativePath)
+        return remotePath
+    
+    def getLocalPath(self, remotePath):
+        relativePath = posixpath.relpath(remotePath, self.rd)
+        localRelativePath = os.sep.join(relativePath.split(posixpath.sep))
+        localPath = os.path.join(self.ld, localRelativePath)
+        return localPath
+
+    def uploadIfHashChanged(self, localPath):
+        localHash = utils.getFileMd5(localPath)
+        remotePath = self.getRemotePath(localPath)
+        if self.getHash(remotePath) == localHash:
+            return False
+        self.print("Updating {}".format(remotePath))
+        if self.getHash(remotePath):
+            self.delete(remotePath)
+
+        with open(localPath, "rb") as fh:
+            remoteDirectory = posixpath.dirname(remotePath)
+            self.recursiveMkdir(remoteDirectory)
+            self.uploadFile(fh, remotePath)
+            self.registerHash(remotePath, localHash)
+
+        return True
+
+
+    def registerHash(self, remotePath, fileHash):
+        self.fileHashes[remotePath] = fileHash
+
+    def getHash(self, remotePath):
+        return self.fileHashes.get(remotePath, "")
+
+    def unregisterHash(self, remotePath):
+        del self.fileHashes[remotePath]
+
     def syncFileHashes(self):
-        print("Uploading file hashes...", end='')
         fileHashesStr = json.dumps(self.fileHashes)
-        fd = io.BytesIO(bytearray(fileHashesStr, "utf-8")) 
+        fh = io.BytesIO(bytearray(fileHashesStr, "utf-8")) 
         remotePath = posixpath.join(self.rd, HASH_FILE)
-        self.uploadFile(fd, remotePath)
-        print("Done")
+        self.uploadFile(fh, remotePath)
 
-    def downloadFile(self, fd, remoteFilePath):
-        self.retrbinary('RETR ' + remoteFilePath,lambda buffer: fd.write(buffer))
+    def downloadFile(self, fh, remotePath):
+        self.retrbinary('RETR ' + remotePath,lambda buffer: fh.write(buffer))
     
-    def uploadFile(self, fd, remoteFilePath):
-        self.storbinary('STOR ' + remoteFilePath,fd)
+    def uploadFile(self, fh, remotePath):
+        self.storbinary('STOR ' + remotePath,fh)
     
-    def uploadFileByPath(self, localFilePath):
-        pass
-    def recursiveMkdir(self, remotePath, cacheDirs = set()):
+
+    def uploadFileByPath(self, localPath):
+        remotePath = self.getRemotePath(localPath)
+        remoteDirectory = posixpath.dirname(remotePath)
+        self.print("Uploading {} => {}".format(localPath, remotePath))
+        self.recursiveMkdir(remoteDirectory)
+        with open(localPath, "rb") as fh:
+            self.uploadFile(fh, remotePath)
+    
+    def downloadFileByPath(self, localPath):
+        remotePath = self.getRemotePath(localPath)
+        self.print("Downloading {} => {}".format(remotePath, localPath))
+        os.makedirs(os.path.dirname(localPath), exist_ok=True)
+        with open(localPath, "wb") as fh:
+            self.downloadFile(fh, remotePath)
+    
+    def createDirectoryByPath(self, localPath):
+        remotePath = self.getRemotePath(localPath)
+        self.print("Creating directory {}".format(remotePath))
+        self.recursiveMkdir(remotePath)
+
+    def deleteDirectoryByPath(self, localPath):
+
+        remotePath = self.getRemotePath(localPath)
+        self.print("Deleting directory {}".format(remotePath))
+        self.rmd(remotePath)
+        self.cacheDirs.remove(remotePath)
+
+    def deleteFileByPath(self, localPath):
+        remotePath = self.getRemotePath(localPath)
+        self.print("Deleting file {}".format(remotePath))
+        self.delete(remotePath) 
+        self.unregisterHash(remotePath)
+
+    def recursiveMkdir(self, remotePath):
         pathPieces = remotePath.split(posixpath.sep)
         rootDirPieces = []
         for pathPiece in pathPieces:
@@ -139,7 +193,6 @@ class FtpSync(FTP):
             if targetDirectory in self.cacheDirs:
                 # Already exists to skip it
                 continue
-            print("Making directory...", targetDirectory)
             self.mkd(targetDirectory)
             # Add to prevent remaking it again
             self.cacheDirs.add(targetDirectory)
@@ -170,3 +223,4 @@ class FtpSync(FTP):
 
                     files.add(fileName)
         return files, dirs
+
